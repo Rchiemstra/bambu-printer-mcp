@@ -102,6 +102,8 @@ This fork adds a substantial set of printer control tools beyond the upstream `m
 - Upload and print pre-sliced `.gcode.3mf` files with full plate selection and calibration flag control (recommended path — see [docs/SLICING.md](./docs/SLICING.md))
 - Optional single-color auto-slice path via BambuStudio CLI. Set `BAMBU_CLI_FLATTEN=true` to enable a workaround that flattens BBL profile inheritance before invoking the CLI — works around upstream bugs in BambuStudio CLI mode ([#9636](https://github.com/bambulab/BambuStudio/issues/9636), [#9968](https://github.com/bambulab/BambuStudio/issues/9968)). Single-color smoke is verified on H2S/H2D/X1C/P1S; H2C requires Bambu Studio 2.4.0 or newer and should use `BAMBU_MODEL=h2c`, not an H2D fallback. H2D two-color CLI slicing is blocked upstream ([#10408](https://github.com/bambulab/BambuStudio/issues/10408)); use a GUI-sliced `.gcode.3mf` for that workflow. Default off; Path A (GUI-slice) remains the recommended workflow for non-BBL profiles, multi-color H2 jobs, or first-time prints. See [docs/SLICING.md](./docs/SLICING.md).
 - Parse AMS mapping from the 3MF's embedded slicer metadata (`Metadata/plate_<n>.json` + gcode filament header) and send it correctly formatted per the OpenBambuAPI spec, with correct H2S/H2D/H2C `ams_mapping2` parallel array format
+- Analyze sliced support roles, commanded filament/volume/mass, mesh-contact heuristics, and caller-annotated sensitive regions with `analyze_3mf_supports`; no printer connection or model setting is required
+- Render deterministic orthographic sliced-toolpath PNGs with `render_3mf_preview`, returning mixed MCP text/image content and an optional secure atomic save path
 - **Auto-match AMS slots by RFID** (`auto_match_ams` flag on `print_3mf`). Resolves required `tray_info_idx` from the sliced 3MF against live AMS inventory. Handles same-SKU different-color filaments by matching on `(tray_info_idx, tray_color)` and tracking already-claimed slots. Dry-run with `resolve_3mf_ams_slots` before printing.
 - Cancel, pause, and resume in-progress print jobs via MQTT
 - Skip specific objects during a running multi-object print via `skip_objects` (use `list_3mf_plate_objects` to find object IDs first)
@@ -593,6 +595,16 @@ This is the sequence that successfully started a print on an H2S running current
 ---
 
 ## Available Tools
+
+Support inspection is documented in [docs/SUPPORT_ANALYSIS.md](./docs/SUPPORT_ANALYSIS.md). Both support tools operate only on local, already-sliced 3MF files and never initialize MQTT or FTPS.
+
+#### analyze_3mf_supports
+
+Securely streams one sliced plate and reports support-body, transition, interface, combined, per-layer, and per-filament metrics. Mesh analysis is enabled by default and returns explicitly heuristic contacts, interface area, local clearance, and intersections with caller-provided box/cylinder annotations. Missing feature markers produce an indeterminate `support_present`, never a false negative.
+
+#### render_3mf_preview
+
+Returns a deterministic feature-colored PNG as MCP image content plus text and structured summaries. Supports seven orthographic views, role/layer toggles, solid or transparent backgrounds, bounded dimensions, cancellation, and an optional symlink-safe atomic `save_path`.
 
 <details>
 <summary><strong>Click to expand STL Manipulation Tools</strong></summary>

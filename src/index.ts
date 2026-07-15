@@ -28,6 +28,10 @@ import { hasAmsMappingInput, normalizeAmsMappingObject, normalizeBridgeAmsTrayVa
 import { analyze3MFAmsRequirements, analyze3MFPlateObjects, analyzeCollarCharm3MF, extractBambuTemplateSettings, getCollarCharmRolePolicy, parse3MF } from './3mf_parser.js';
 import type { ThreeMFAmsRequirements } from "./types.js";
 import { BambuImplementation } from "./printers/bambu.js";
+import { analyze3mfSupports, type AnalyzeSupportsInput } from "./support/support-analyzer.js";
+import { render3mfPreview, type RenderPreviewInput } from "./render/support-preview.js";
+import { createPreviewMcpResult } from "./mcp/image-result.js";
+import { SupportToolError } from "./support/support-error.js";
 
 dotenv.config();
 
@@ -2542,6 +2546,74 @@ class BambuPrinterMCPServer {
             }
           },
           {
+            name: "analyze_3mf_supports",
+            description: "Securely analyze support extrusion toolpaths and optional mesh contacts in one sliced 3MF plate without contacting a printer.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                three_mf_path: { type: "string", description: "Path to a local sliced 3MF/.gcode.3mf file." },
+                plate_index: { type: "integer", minimum: 0, description: "Zero-based plate index to analyze (default: 0)." },
+                timeout_ms: { type: "integer", minimum: 1, maximum: 120000, description: "Analysis deadline in milliseconds (default: 30000, maximum: 120000)." },
+                mesh_analysis: { type: "boolean", description: "Parse selected-plate meshes and run contact, clearance, and annotated-opening heuristics (default: true)." },
+                sensitive_regions: {
+                  type: "array",
+                  description: "Optional caller-defined box or cylinder regions for blocked-opening and functional-surface checks.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", description: "Stable annotation identifier." },
+                      semantic: { type: "string", description: "Caller-provided meaning such as screw hole or bearing seat." },
+                      kind: { type: "string", enum: ["box", "cylinder"], description: "Annotation shape." },
+                      center: {
+                        type: "object",
+                        description: "Region center in 3MF millimeters.",
+                        properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } },
+                        required: ["x", "y", "z"]
+                      },
+                      size: {
+                        type: "object",
+                        description: "Box dimensions in millimeters when kind is box.",
+                        properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } },
+                        required: ["x", "y", "z"]
+                      },
+                      radius_mm: { type: "number", description: "Cylinder radius in millimeters when kind is cylinder." },
+                      height_mm: { type: "number", description: "Cylinder height in millimeters when kind is cylinder." }
+                    },
+                    required: ["id", "kind", "center"]
+                  }
+                }
+              },
+              required: ["three_mf_path"]
+            }
+          },
+          {
+            name: "render_3mf_preview",
+            description: "Render a deterministic PNG preview of sliced model and support toolpaths without a browser, GPU, slicer, or printer connection.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                three_mf_path: { type: "string", description: "Path to a local sliced 3MF/.gcode.3mf file." },
+                plate_index: { type: "integer", minimum: 0, description: "Zero-based plate index to render (default: 0)." },
+                timeout_ms: { type: "integer", minimum: 1, maximum: 120000, description: "Render deadline in milliseconds (default: 60000, maximum: 120000)." },
+                view: { type: "string", enum: ["isometric", "front", "rear", "left", "right", "top", "bottom"], description: "Orthographic camera view (default: isometric)." },
+                color_scheme: { type: "string", enum: ["feature_type"], description: "Semantic color scheme; only feature_type is supported." },
+                show_model: { type: "boolean", description: "Show model extrusion roles (default: true)." },
+                show_support: { type: "boolean", description: "Show support body and transition roles (default: true)." },
+                show_support_interface: { type: "boolean", description: "Show support interface and ironing roles (default: true)." },
+                show_travel: { type: "boolean", description: "Show non-extruding travel moves (default: false)." },
+                layer_start: { type: "integer", minimum: 0, description: "Optional inclusive first parsed layer index." },
+                layer_end: { type: "integer", minimum: 0, description: "Optional inclusive last parsed layer index." },
+                width: { type: "integer", minimum: 64, maximum: 2048, description: "PNG width in pixels (default: 1200)." },
+                height: { type: "integer", minimum: 64, maximum: 2048, description: "PNG height in pixels (default: 900); total output is capped at 4 megapixels." },
+                background: { type: "string", enum: ["solid", "transparent"], description: "PNG background mode (default: solid)." },
+                background_color: { type: "string", description: "Background color as #RRGGBB or #RRGGBBAA (default: #FFFFFF)." },
+                save_path: { type: "string", description: "Optional explicit local destination for an atomic PNG save." },
+                overwrite: { type: "boolean", description: "Allow replacement of an existing regular destination file (default: false)." }
+              },
+              required: ["three_mf_path"]
+            }
+          },
+          {
             name: "merge_vertices",
             description: "Merge vertices in an STL file closer than the specified tolerance",
             inputSchema: {
@@ -2597,7 +2669,7 @@ class BambuPrinterMCPServer {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
 
       const host = String(args?.host || DEFAULT_HOST);
@@ -2617,6 +2689,19 @@ class BambuPrinterMCPServer {
         let result;
 
         switch (name) {
+          case "analyze_3mf_supports": {
+            const analysis = await analyze3mfSupports(args as unknown as AnalyzeSupportsInput, { signal: extra.signal });
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(analysis, null, 2) }],
+              structuredContent: analysis as unknown as Record<string, unknown>,
+            };
+          }
+
+          case "render_3mf_preview": {
+            const preview = await render3mfPreview(args as unknown as RenderPreviewInput, extra.signal);
+            return createPreviewMcpResult(preview) as any;
+          }
+
           case "get_printer_status":
             result = await this.bambu.getStatus(host, bambuSerial, bambuToken);
             break;
@@ -3446,17 +3531,22 @@ class BambuPrinterMCPServer {
 
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const supportError = error instanceof SupportToolError ? error : null;
         const structured: StructuredToolError = {
           status: "error",
-          retryable: false,
+          retryable: supportError?.retryable ?? false,
           suggestion: `Check parameters and try again. Error: ${message}`,
           message,
           tool: name,
         };
 
+        const detailedStructured = supportError
+          ? { ...structured, code: supportError.code, details: supportError.details }
+          : structured;
+
         return {
           content: [{ type: "text", text: `Error: ${message}` }],
-          structuredContent: structured,
+          structuredContent: detailedStructured,
           isError: true,
         };
       }
