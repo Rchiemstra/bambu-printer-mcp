@@ -1,0 +1,14 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      BAMBU_MODEL: ""
+      MCP_TRANSPORT: stdio
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,size=512m,mode=1777
+      - /app/temp:size=64m,mode=1777
+      - /app/dist:size=64m,mode=1777
